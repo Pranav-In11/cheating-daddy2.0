@@ -4,7 +4,6 @@ if (require('electron-squirrel-startup')) {
 
 const { app, BrowserWindow, shell, ipcMain } = require('electron');
 const { createWindow, updateGlobalShortcuts } = require('./utils/window');
-// We change the import to our new openai utility
 const { setupOpenAIIpcHandlers, stopMacOSAudioCapture, sendToRenderer } = require('./utils/openai');
 const storage = require('./storage');
 
@@ -19,13 +18,13 @@ function createMainWindow() {
 app.whenReady().then(async () => {
     storage.initializeStorage();
 
+    // Permissions for macOS
     if (process.platform === 'darwin') {
         const { desktopCapturer } = require('electron');
         desktopCapturer.getSources({ types: ['screen'] }).catch(() => {});
     }
 
     createMainWindow();
-    // Initialize the OpenAI Handlers
     setupOpenAIIpcHandlers(aiSessionRef);
     setupStorageIpcHandlers();
     setupGeneralIpcHandlers();
@@ -33,46 +32,33 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
     stopMacOSAudioCapture();
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
-});
-
-app.on('before-quit', () => {
-    stopMacOSAudioCapture();
-});
-
-app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-        createMainWindow();
-    }
+    if (process.platform !== 'darwin') app.quit();
 });
 
 function setupStorageIpcHandlers() {
-    ipcMain.handle('storage:get-api-key', async () => {
-        try {
-            return { success: true, data: storage.getApiKey() };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
-    });
-
+    ipcMain.handle('storage:get-api-key', async () => ({ success: true, data: storage.getApiKey() }));
     ipcMain.handle('storage:set-api-key', async (event, apiKey) => {
-        try {
-            storage.setApiKey(apiKey);
-            return { success: true };
-        } catch (error) {
-            return { success: false, error: error.message };
-        }
+        storage.setApiKey(apiKey);
+        return { success: true };
     });
-    
-    // Standard storage handlers for preferences and sessions
+    // Standard preference handlers
     ipcMain.handle('storage:get-preferences', async () => ({ success: true, data: storage.getPreferences() }));
     ipcMain.handle('storage:get-config', async () => ({ success: true, data: storage.getConfig() }));
+    ipcMain.handle('storage:update-preference', async (e, k, v) => {
+        storage.updatePreference(k, v);
+        return { success: true };
+    });
 }
 
 function setupGeneralIpcHandlers() {
     ipcMain.handle('get-app-version', async () => app.getVersion());
     ipcMain.handle('quit-application', async () => { app.quit(); return { success: true }; });
     ipcMain.handle('open-external', async (event, url) => { await shell.openExternal(url); return { success: true }; });
+    
+    ipcMain.on('update-keybinds', (event, newKeybinds) => {
+        if (mainWindow) {
+            storage.setKeybinds(newKeybinds);
+            updateGlobalShortcuts(newKeybinds, mainWindow, sendToRenderer, aiSessionRef);
+        }
+    });
 }
